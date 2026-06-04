@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+
+    env:
+      VITE_REPOSITORY_URL: https://github.com/${{ github.repository }}
+      VITE_RELEASES_URL: https://github.com/${{ github.repository }}/releases/latest
+      VITE_WEB_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check SemVer tag matches package version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "Tag version $TAG_VERSION does not match package version $PACKAGE_VERSION"
+            exit 1
+          fi
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Build web page
+        run: npm run build:web
+
+      - name: Build standalone HTML
+        run: npm run build:standalone
+
+      - name: Build extension packages
+        run: |
+          npm run zip:chrome
+          npm run zip:firefox
+
+      - name: Package web page
+        run: tar -czf ".output/aegis-totp-viewer-web-${GITHUB_REF_NAME}.tar.gz" -C dist/web .
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/web
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            .output/*.zip
+            .output/*.tar.gz
+
+  deploy-pages:
+    name: Deploy Pages
+    needs: package
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

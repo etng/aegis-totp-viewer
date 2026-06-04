@@ -1,0 +1,38 @@
+{
+  "name": "aegis-totp-viewer",
+  "version": "0.1.0",
+  "description": "Open encrypted Aegis backups and view TOTP codes locally.",
+  "homepage": "https://etng.github.io/aegis-totp-viewer/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/etng/aegis-totp-viewer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/etng/aegis-totp-viewer/issues"
+  },
+  "type": "module",
+  "private": false,
+  "scripts": {
+    "dev": "wxt",
+    "dev:web": "vite --config vite.web.config.ts --host 127.0.0.1",
+    "dev:firefox": "wxt -b firefox",
+    "preview:web": "vite preview --config vite.web.config.ts --host 127.0.0.1",
+    "prepare": "wxt prepare",
+    "typecheck": "wxt prepare && tsc --noEmit",
+    "build": "npm run build:web && npm run build:standalone && npm run build:chrome && npm run build:firefox",
+    "build:web": "vite build --config vite.web.config.ts",
+    "build:standalone": "node scripts/build-standalone.mjs",
+    "build:chrome": "wxt build -b chrome",
+    "build:firefox": "wxt build -b firefox",
+    "zip:chrome": "wxt zip -b chrome",
+    "zip:firefox": "wxt zip -b firefox"
+  },
+  "dependencies": {
+    "scrypt-js": "^3.0.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^7.2.4",
+    "wxt": "^0.20.26"
+  }
+}

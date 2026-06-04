@@ -1,0 +1,10 @@
+.DS_Store
+node_modules/
+.wxt/
+.output/
+dist/
+docs/
+*.log
+
+# Private companion documentation. Keep this out of the public repo.
+.docs/

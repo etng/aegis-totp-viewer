@@ -1,0 +1,44 @@
+name: Check
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Build web page
+        run: npm run build:web
+
+      - name: Build standalone HTML
+        run: npm run build:standalone
+
+      - name: Build Chrome extension
+        run: npm run build:chrome
+
+      - name: Build Firefox extension
+        run: npm run build:firefox
