@@ -110,7 +110,7 @@ function appTemplate(config: AppConfig, links: AppLinks): string {
   const secondaryHref = links.repoUrl;
   const secondaryLabel = '给项目点 Star';
   const ctaText = isExtension
-    ? '也可以把在线版加入书签；如果这个工具帮到了你，欢迎给项目点 Star。'
+    ? '也可以收藏在线版；觉得有用的话，欢迎点 Star。'
     : '经常使用的话，安装浏览器插件会更顺手；如果这个工具帮到了你，欢迎给项目点 Star。';
 
   return `
