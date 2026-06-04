@@ -112,6 +112,9 @@ function appTemplate(config: AppConfig, links: AppLinks): string {
   const ctaText = isExtension
     ? '也可以收藏在线版；觉得有用的话，欢迎点 Star。'
     : '经常使用的话，安装浏览器插件会更顺手；如果这个工具帮到了你，欢迎给项目点 Star。';
+  const footnoteText = isExtension
+    ? '<b>安全提示</b> 关闭 popup 或点击「锁定」会清空当前状态。'
+    : '<b>安全提示</b><br>验证码与密钥只存在于当前页面内存中，刷新页面或点击「锁定」即抹除。<br>建议使用加密导出，并妥善保存你的备份文件。';
 
   return `
     <div class="wrap">
@@ -157,9 +160,7 @@ function appTemplate(config: AppConfig, links: AppLinks): string {
         <div class="group-tabs" id="groupTabs" aria-label="按分组筛选"></div>
         <div class="grid" id="grid"></div>
         <div class="footnote">
-          <b>安全提示</b><br>
-          验证码与密钥只存在于当前页面内存中，刷新页面或点击「锁定」即抹除。<br>
-          建议使用加密导出，并妥善保存你的备份文件。
+          ${footnoteText}
         </div>
       </section>
 
@@ -325,12 +326,20 @@ export function mountAegisTotpApp(root: HTMLElement, config: AppConfig): void {
       selectedId = filtered[0].id;
     }
 
-    filtered.forEach((entry) => {
-      const active = showAll || entry.id === selectedId;
+    const ordered = selectedId
+      ? [
+          ...filtered.filter((entry) => entry.id === selectedId),
+          ...filtered.filter((entry) => entry.id !== selectedId)
+        ]
+      : filtered;
+
+    ordered.forEach((entry) => {
+      const selected = entry.id === selectedId;
+      const active = showAll || selected;
       const initial = (entry.displayIssuer || entry.displayAccount || '?').trim().charAt(0).toUpperCase() || '?';
       const element = document.createElement('button');
       element.type = 'button';
-      element.className = `card${active ? ' selected' : ''}`;
+      element.className = `card${active ? ' active' : ''}${selected ? ' selected' : ''}`;
       element.setAttribute('aria-pressed', String(active));
       element.innerHTML = `
         <div class="progress" style="width:0%"></div>

@@ -1,6 +1,6 @@
 {
   "name": "aegis-totp-viewer",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Open encrypted Aegis backups and view TOTP codes locally.",
   "homepage": "https://etng.github.io/aegis-totp-viewer/",
   "repository": {
@@ -24,6 +24,7 @@
     "build:standalone": "node scripts/build-standalone.mjs",
     "build:chrome": "wxt build -b chrome",
     "build:firefox": "wxt build -b firefox",
+    "check:popup": "node scripts/check-popup-layout.mjs",
     "zip:chrome": "wxt zip -b chrome",
     "zip:firefox": "wxt zip -b firefox"
   },
