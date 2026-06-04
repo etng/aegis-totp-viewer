@@ -25,6 +25,8 @@ interface CardState {
   raw: string;
 }
 
+const RENDER_DEBOUNCE_MS = 120;
+
 function getEnvValue(name: string): string | undefined {
   const value = import.meta.env[name];
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -152,6 +154,7 @@ function appTemplate(config: AppConfig, links: AppLinks): string {
           <button class="btn ghost compact" id="mode" type="button" aria-pressed="false">显示全部</button>
           <button class="btn ghost compact" id="lock" type="button">锁定</button>
         </div>
+        <div class="group-tabs" id="groupTabs" aria-label="按分组筛选"></div>
         <div class="grid" id="grid"></div>
         <div class="footnote">
           <b>安全提示</b><br>
@@ -199,14 +202,17 @@ export function mountAegisTotpApp(root: HTMLElement, config: AppConfig): void {
   const count = requireElement<HTMLElement>(root, '#count');
   const modeButton = requireElement<HTMLButtonElement>(root, '#mode');
   const lockButton = requireElement<HTMLButtonElement>(root, '#lock');
+  const groupTabs = requireElement<HTMLElement>(root, '#groupTabs');
   const grid = requireElement<HTMLElement>(root, '#grid');
 
   let entries: VaultEntry[] = [];
   const view: CardState[] = [];
   let pendingText: string | null = null;
   let selectedId: string | null = null;
+  let selectedGroup: string | null = null;
   let showAll = false;
   let ticker: ReturnType<typeof setInterval> | null = null;
+  let renderTimer: ReturnType<typeof setTimeout> | null = null;
   let ticking = false;
   let queuedForce = false;
 
@@ -231,9 +237,79 @@ export function mountAegisTotpApp(root: HTMLElement, config: AppConfig): void {
     root.querySelector('.empty')?.remove();
   }
 
+  function scheduleBuildCards(): void {
+    if (renderTimer) {
+      clearTimeout(renderTimer);
+    }
+
+    renderTimer = setTimeout(() => {
+      renderTimer = null;
+      buildCards();
+    }, RENDER_DEBOUNCE_MS);
+  }
+
   function selectEntry(id: string): void {
     selectedId = id;
-    buildCards();
+    scheduleBuildCards();
+  }
+
+  function getGroupNames(): string[] {
+    return [...new Set(entries.flatMap((entry) => entry.groupNames))].sort((left, right) =>
+      left.localeCompare(right)
+    );
+  }
+
+  function getVisibleEntries(query: string): VaultEntry[] {
+    return entries.filter((entry) => {
+      const matchesSearch = !query || entry.searchable.includes(query);
+      const matchesGroup = !selectedGroup || entry.groupNames.includes(selectedGroup);
+      return matchesSearch && matchesGroup;
+    });
+  }
+
+  function renderGroupTabs(query: string): void {
+    const groups = getGroupNames();
+    const currentGroupStillExists = selectedGroup ? groups.includes(selectedGroup) : true;
+    if (!currentGroupStillExists) {
+      selectedGroup = null;
+    }
+
+    const allCount = entries.filter((entry) => !query || entry.searchable.includes(query)).length;
+    const tabs = [
+      {
+        label: '所有',
+        group: null,
+        count: allCount,
+        active: selectedGroup === null
+      },
+      ...groups.map((group) => ({
+        label: group,
+        group,
+        count: entries.filter(
+          (entry) => entry.groupNames.includes(group) && (!query || entry.searchable.includes(query))
+        ).length,
+        active: selectedGroup === group
+      }))
+    ];
+
+    groupTabs.innerHTML = tabs
+      .map((tab, index) => {
+        return `
+          <button class="group-tab${tab.active ? ' active' : ''}" type="button" data-group-index="${index}" aria-pressed="${tab.active}">
+            <span>${escapeHtml(tab.label)}</span>
+            <span class="tab-count">${tab.count}</span>
+          </button>
+        `;
+      })
+      .join('');
+
+    groupTabs.querySelectorAll<HTMLButtonElement>('.group-tab').forEach((button) => {
+      button.addEventListener('click', () => {
+        const index = Number.parseInt(button.dataset.groupIndex || '0', 10);
+        selectedGroup = tabs[index]?.group || null;
+        scheduleBuildCards();
+      });
+    });
   }
 
   function buildCards(): void {
@@ -242,7 +318,8 @@ export function mountAegisTotpApp(root: HTMLElement, config: AppConfig): void {
     clearEmptyState();
 
     const query = search.value.toLowerCase().trim();
-    const filtered = entries.filter((entry) => !query || entry.searchable.includes(query));
+    renderGroupTabs(query);
+    const filtered = getVisibleEntries(query);
 
     if (filtered.length > 0 && (!selectedId || !filtered.some((entry) => entry.id === selectedId))) {
       selectedId = filtered[0].id;
@@ -314,7 +391,7 @@ export function mountAegisTotpApp(root: HTMLElement, config: AppConfig): void {
     if (filtered.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'empty';
-      empty.textContent = query ? '没有匹配的条目' : '备份为空';
+      empty.textContent = entries.length === 0 ? '备份为空' : '没有匹配的条目';
       grid.after(empty);
     }
 
@@ -400,6 +477,7 @@ export function mountAegisTotpApp(root: HTMLElement, config: AppConfig): void {
   function openVault(db: AegisDb): void {
     entries = normalizeEntries(db);
     selectedId = entries[0]?.id || null;
+    selectedGroup = null;
     gate.classList.add('hidden');
     vault.classList.remove('hidden');
     setStatus(`unlocked · ${entries.length}`, true);
@@ -412,8 +490,14 @@ export function mountAegisTotpApp(root: HTMLElement, config: AppConfig): void {
     entries = [];
     view.length = 0;
     selectedId = null;
+    selectedGroup = null;
     showAll = false;
+    if (renderTimer) {
+      clearTimeout(renderTimer);
+      renderTimer = null;
+    }
     grid.innerHTML = '';
+    groupTabs.innerHTML = '';
     clearEmptyState();
     password.value = '';
     paste.value = '';
@@ -550,11 +634,11 @@ export function mountAegisTotpApp(root: HTMLElement, config: AppConfig): void {
     }
   });
 
-  search.addEventListener('input', buildCards);
+  search.addEventListener('input', scheduleBuildCards);
   lockButton.addEventListener('click', lock);
   modeButton.addEventListener('click', () => {
     showAll = !showAll;
-    buildCards();
+    scheduleBuildCards();
   });
 
   document.addEventListener('visibilitychange', () => {
