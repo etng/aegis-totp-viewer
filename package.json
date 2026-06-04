@@ -1,6 +1,6 @@
 {
   "name": "aegis-totp-viewer",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Open encrypted Aegis backups and view TOTP codes locally.",
   "homepage": "https://etng.github.io/aegis-totp-viewer/",
   "repository": {

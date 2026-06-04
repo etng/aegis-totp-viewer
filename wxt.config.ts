@@ -18,7 +18,7 @@ export default defineConfig({
     name: 'Aegis TOTP Viewer',
     description: 'Open encrypted Aegis backups and view TOTP codes locally.',
     icons: extensionIcons,
-    permissions: ['clipboardWrite'],
+    permissions: ['clipboardWrite', 'storage'],
     ...(browser === 'firefox'
       ? {
           browser_action: extensionAction,

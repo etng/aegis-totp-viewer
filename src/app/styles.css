@@ -27,10 +27,10 @@ body{
   line-height:1.5;
 }
 body[data-variant="extension"]{
-  width:min(780px,100vw);
-  min-width:min(720px,100vw);
-  height:min(720px,100vh);
-  min-height:min(600px,100vh);
+  width:760px;
+  height:600px;
+  min-width:760px;
+  min-height:600px;
   overflow:hidden;
 }
 .wrap{max-width:880px;margin:0 auto;padding:42px 20px 80px}

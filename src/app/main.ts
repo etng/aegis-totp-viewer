@@ -25,7 +25,22 @@ interface CardState {
   raw: string;
 }
 
+interface SessionCache {
+  db: AegisDb;
+  selectedId: string | null;
+  selectedGroup: string | null;
+  showAll: boolean;
+  savedAt: number;
+}
+
+interface ExtensionStorageArea {
+  get(keys: string[]): Promise<Record<string, unknown>>;
+  set(items: Record<string, unknown>): Promise<void>;
+  remove(keys: string | string[]): Promise<void>;
+}
+
 const RENDER_DEBOUNCE_MS = 120;
+const SESSION_CACHE_KEY = 'aegisTotpViewer.session';
 
 function getEnvValue(name: string): string | undefined {
   const value = import.meta.env[name];
@@ -61,6 +76,70 @@ function getLinks(config: AppConfig): AppLinks {
     releasesUrl,
     webUrl
   };
+}
+
+function getExtensionSessionStorage(config: AppConfig): ExtensionStorageArea | null {
+  if (config.variant !== 'extension') {
+    return null;
+  }
+
+  const scope = globalThis as {
+    chrome?: { storage?: { session?: ExtensionStorageArea } };
+    browser?: { storage?: { session?: ExtensionStorageArea } };
+  };
+
+  return scope.chrome?.storage?.session || scope.browser?.storage?.session || null;
+}
+
+async function readSessionCache(config: AppConfig): Promise<SessionCache | null> {
+  const storage = getExtensionSessionStorage(config);
+  if (!storage) {
+    return null;
+  }
+
+  try {
+    const result = await storage.get([SESSION_CACHE_KEY]);
+    const value = result[SESSION_CACHE_KEY] as Partial<SessionCache> | undefined;
+    if (!value || !value.db || !Array.isArray(value.db.entries)) {
+      return null;
+    }
+
+    return {
+      db: value.db,
+      selectedId: typeof value.selectedId === 'string' ? value.selectedId : null,
+      selectedGroup: typeof value.selectedGroup === 'string' ? value.selectedGroup : null,
+      showAll: Boolean(value.showAll),
+      savedAt: typeof value.savedAt === 'number' ? value.savedAt : Date.now()
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function writeSessionCache(config: AppConfig, cache: SessionCache): Promise<void> {
+  const storage = getExtensionSessionStorage(config);
+  if (!storage) {
+    return;
+  }
+
+  try {
+    await storage.set({ [SESSION_CACHE_KEY]: cache });
+  } catch {
+    // Session cache is a convenience. The unlocked in-page state still works if storage fails.
+  }
+}
+
+async function clearSessionCache(config: AppConfig): Promise<void> {
+  const storage = getExtensionSessionStorage(config);
+  if (!storage) {
+    return;
+  }
+
+  try {
+    await storage.remove(SESSION_CACHE_KEY);
+  } catch {
+    // The lock action still clears the current page state even if storage cleanup fails.
+  }
 }
 
 function escapeHtml(value: string): string {
@@ -113,7 +192,7 @@ function appTemplate(config: AppConfig, links: AppLinks): string {
     ? '也可以收藏在线版；觉得有用的话，欢迎点 Star。'
     : '经常使用的话，安装浏览器插件会更顺手；如果这个工具帮到了你，欢迎给项目点 Star。';
   const footnoteText = isExtension
-    ? '<b>安全提示</b> 关闭 popup 或点击「锁定」会清空当前状态。'
+    ? '<b>安全提示</b> 本次浏览器会话内会保留解锁状态；点击「锁定」会立即清空。'
     : '<b>安全提示</b><br>验证码与密钥只存在于当前页面内存中，刷新页面或点击「锁定」即抹除。<br>建议使用加密导出，并妥善保存你的备份文件。';
 
   return `
@@ -207,6 +286,7 @@ export function mountAegisTotpApp(root: HTMLElement, config: AppConfig): void {
   const grid = requireElement<HTMLElement>(root, '#grid');
 
   let entries: VaultEntry[] = [];
+  let currentDb: AegisDb | null = null;
   const view: CardState[] = [];
   let pendingText: string | null = null;
   let selectedId: string | null = null;
@@ -251,6 +331,7 @@ export function mountAegisTotpApp(root: HTMLElement, config: AppConfig): void {
 
   function selectEntry(id: string): void {
     selectedId = id;
+    void persistSession();
     scheduleBuildCards();
   }
 
@@ -308,6 +389,7 @@ export function mountAegisTotpApp(root: HTMLElement, config: AppConfig): void {
       button.addEventListener('click', () => {
         const index = Number.parseInt(button.dataset.groupIndex || '0', 10);
         selectedGroup = tabs[index]?.group || null;
+        void persistSession();
         scheduleBuildCards();
       });
     });
@@ -381,6 +463,7 @@ export function mountAegisTotpApp(root: HTMLElement, config: AppConfig): void {
           return;
         }
         selectedId = entry.id;
+        void persistSession();
       });
 
       state.codeEl.addEventListener('click', (event) => {
@@ -484,9 +567,28 @@ export function mountAegisTotpApp(root: HTMLElement, config: AppConfig): void {
   }
 
   function openVault(db: AegisDb): void {
+    currentDb = db;
     entries = normalizeEntries(db);
     selectedId = entries[0]?.id || null;
     selectedGroup = null;
+    showAll = false;
+    gate.classList.add('hidden');
+    vault.classList.remove('hidden');
+    setStatus(`unlocked · ${entries.length}`, true);
+    buildCards();
+    startTicker();
+    void persistSession(db);
+  }
+
+  function restoreVault(cache: SessionCache): void {
+    currentDb = cache.db;
+    entries = normalizeEntries(cache.db);
+    selectedId =
+      cache.selectedId && entries.some((entry) => entry.id === cache.selectedId)
+        ? cache.selectedId
+        : entries[0]?.id || null;
+    selectedGroup = cache.selectedGroup;
+    showAll = cache.showAll;
     gate.classList.add('hidden');
     vault.classList.remove('hidden');
     setStatus(`unlocked · ${entries.length}`, true);
@@ -494,9 +596,25 @@ export function mountAegisTotpApp(root: HTMLElement, config: AppConfig): void {
     startTicker();
   }
 
+  async function persistSession(db?: AegisDb): Promise<void> {
+    const dbToPersist = db || currentDb;
+    if (!dbToPersist || entries.length === 0) {
+      return;
+    }
+
+    await writeSessionCache(config, {
+      db: dbToPersist,
+      selectedId,
+      selectedGroup,
+      showAll,
+      savedAt: Date.now()
+    });
+  }
+
   function lock(): void {
     stopTicker();
     entries = [];
+    currentDb = null;
     view.length = 0;
     selectedId = null;
     selectedGroup = null;
@@ -517,6 +635,7 @@ export function mountAegisTotpApp(root: HTMLElement, config: AppConfig): void {
     gate.classList.remove('hidden');
     setStatus('locked', false);
     updateModeButton();
+    void clearSessionCache(config);
   }
 
   async function readFile(file: File): Promise<void> {
@@ -647,6 +766,7 @@ export function mountAegisTotpApp(root: HTMLElement, config: AppConfig): void {
   lockButton.addEventListener('click', lock);
   modeButton.addEventListener('click', () => {
     showAll = !showAll;
+    void persistSession();
     scheduleBuildCards();
   });
 
@@ -659,6 +779,12 @@ export function mountAegisTotpApp(root: HTMLElement, config: AppConfig): void {
     if (!vault.classList.contains('hidden')) {
       startTicker();
       void tick(true);
+    }
+  });
+
+  void readSessionCache(config).then((cache) => {
+    if (cache) {
+      restoreVault(cache);
     }
   });
 }

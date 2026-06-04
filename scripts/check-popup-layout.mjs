@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const extensionRoot = path.resolve('.output/chrome-mv3');
-const width = Number.parseInt(process.env.POPUP_WIDTH || '780', 10);
-const height = Number.parseInt(process.env.POPUP_HEIGHT || '720', 10);
+const width = Number.parseInt(process.env.POPUP_WIDTH || '760', 10);
+const height = Number.parseInt(process.env.POPUP_HEIGHT || '600', 10);
 const screenshotPath = process.env.POPUP_LAYOUT_SCREENSHOT || path.join(tmpdir(), 'aegis-popup-unlocked.png');
 const chromeBinary =
   process.env.CHROME_BIN ||
@@ -253,6 +253,45 @@ function assertLayout(layout) {
   }
 }
 
+const layoutExpression = `(() => {
+  const rect = (element) => {
+    const value = element.getBoundingClientRect();
+    return {
+      top: value.top,
+      right: value.right,
+      bottom: value.bottom,
+      left: value.left,
+      width: value.width,
+      height: value.height
+    };
+  };
+  const grid = document.querySelector('#grid');
+  const selected = document.querySelector('.card.selected');
+  const code = document.querySelector('.card.selected .code');
+  const codeline = document.querySelector('.card.selected .codeline');
+  const gridRect = rect(grid);
+  const selectedRect = rect(selected);
+  const codeRect = rect(code);
+  const codelineRect = rect(codeline);
+  return {
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+    bodyOverflowX: document.documentElement.scrollWidth > window.innerWidth + 1 || document.body.scrollWidth > window.innerWidth + 1,
+    bodyOverflowY: document.documentElement.scrollHeight > window.innerHeight + 1 || document.body.scrollHeight > window.innerHeight + 1,
+    cardCount: document.querySelectorAll('.card').length,
+    codeText: code.textContent.trim(),
+    gridClientHeight: grid.clientHeight,
+    gridScrollHeight: grid.scrollHeight,
+    selectedHeight: selectedRect.height,
+    selectedInGrid: selectedRect.top >= gridRect.top - 1 && selectedRect.bottom <= gridRect.bottom + 1,
+    codeInViewport: codeRect.top >= 0 && codeRect.bottom <= window.innerHeight && codeRect.left >= 0 && codeRect.right <= window.innerWidth,
+    codeInSelected: codeRect.top >= selectedRect.top && codeRect.bottom <= selectedRect.bottom,
+    codelineInSelected: codelineRect.top >= selectedRect.top && codelineRect.bottom <= selectedRect.bottom,
+    selectedRect,
+    codeRect,
+    gridRect
+  };
+})()`;
+
 async function main() {
   const { server, url } = await serveExtension();
   const profileDir = path.join(tmpdir(), `aegis-popup-check-${process.pid}`);
@@ -284,6 +323,32 @@ async function main() {
       height,
       deviceScaleFactor: 1,
       mobile: false
+    }, sessionId);
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `(() => {
+        const prefix = 'aegis-popup-check:';
+        const area = {
+          async get(keys) {
+            const result = {};
+            for (const key of keys) {
+              const raw = localStorage.getItem(prefix + key);
+              if (raw !== null) result[key] = JSON.parse(raw);
+            }
+            return result;
+          },
+          async set(items) {
+            for (const [key, value] of Object.entries(items)) {
+              localStorage.setItem(prefix + key, JSON.stringify(value));
+            }
+          },
+          async remove(keys) {
+            for (const key of Array.isArray(keys) ? keys : [keys]) {
+              localStorage.removeItem(prefix + key);
+            }
+          }
+        };
+        globalThis.chrome = { storage: { session: area } };
+      })();`
     }, sessionId);
     const loaded = cdp.waitForEvent('Page.loadEventFired', sessionId);
     await cdp.send('Page.navigate', { url }, sessionId);
@@ -320,50 +385,26 @@ async function main() {
       'generated selected TOTP code'
     );
 
-    const layout = await evaluate(`(() => {
-      const rect = (element) => {
-        const value = element.getBoundingClientRect();
-        return {
-          top: value.top,
-          right: value.right,
-          bottom: value.bottom,
-          left: value.left,
-          width: value.width,
-          height: value.height
-        };
-      };
-      const grid = document.querySelector('#grid');
-      const selected = document.querySelector('.card.selected');
-      const code = document.querySelector('.card.selected .code');
-      const codeline = document.querySelector('.card.selected .codeline');
-      const gridRect = rect(grid);
-      const selectedRect = rect(selected);
-      const codeRect = rect(code);
-      const codelineRect = rect(codeline);
-      return {
-        viewport: { width: window.innerWidth, height: window.innerHeight },
-        bodyOverflowX: document.documentElement.scrollWidth > window.innerWidth + 1 || document.body.scrollWidth > window.innerWidth + 1,
-        bodyOverflowY: document.documentElement.scrollHeight > window.innerHeight + 1 || document.body.scrollHeight > window.innerHeight + 1,
-        cardCount: document.querySelectorAll('.card').length,
-        codeText: code.textContent.trim(),
-        gridClientHeight: grid.clientHeight,
-        gridScrollHeight: grid.scrollHeight,
-        selectedHeight: selectedRect.height,
-        selectedInGrid: selectedRect.top >= gridRect.top - 1 && selectedRect.bottom <= gridRect.bottom + 1,
-        codeInViewport: codeRect.top >= 0 && codeRect.bottom <= window.innerHeight && codeRect.left >= 0 && codeRect.right <= window.innerWidth,
-        codeInSelected: codeRect.top >= selectedRect.top && codeRect.bottom <= selectedRect.bottom,
-        codelineInSelected: codelineRect.top >= selectedRect.top && codelineRect.bottom <= selectedRect.bottom,
-        selectedRect,
-        codeRect,
-        gridRect
-      };
-    })()`);
+    const layout = await evaluate(layoutExpression);
+    assertLayout(layout);
+
+    const reloaded = cdp.waitForEvent('Page.loadEventFired', sessionId);
+    await cdp.send('Page.reload', {}, sessionId);
+    await reloaded;
+    await waitFor(
+      () => evaluate(`(() => {
+        const text = document.querySelector('.card.selected .code')?.textContent?.trim() || '';
+        return Boolean(text && !text.includes('·') && !text.includes('点按'));
+      })()`),
+      'restored selected TOTP code'
+    );
+    const restoredLayout = await evaluate(layoutExpression);
+    assertLayout(restoredLayout);
 
     const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, sessionId);
     writeFileSync(screenshotPath, Buffer.from(screenshot.data, 'base64'));
-    assertLayout(layout);
 
-    console.log(JSON.stringify({ ok: true, screenshotPath, layout }, null, 2));
+    console.log(JSON.stringify({ ok: true, screenshotPath, layout, restoredLayout }, null, 2));
     ws.close();
   } finally {
     server.close();
